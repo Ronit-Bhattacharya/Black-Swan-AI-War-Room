@@ -1,0 +1,8 @@
+export interface Classification {domain:string;industry:string;decision_type:string;region?:string|null;summary:string;confidence:number;missing_inputs:string[];risk_dimensions:string[];requires_financial_analysis:boolean;requires_live_research:boolean;classification_method:string;}
+export interface PlanStep{agent:string;title:string;purpose:string;status?:string;} export interface InvestigationPlan{investigation_steps:PlanStep[];}
+export interface ResearchItem{id:string;question:string;priority:string;preferred_source_types:string[];} export interface ResearchResult{research_plan:ResearchItem[];source_retrieval_performed:boolean;}
+export interface EvidenceResult{status:string;reason?:string;verified_evidence_count:number;unverified_evidence_count:number;rejected_evidence_count:number;}
+export interface Scenario{id:string;risk_dimension:string;challenge:string;impact:string;severity:string;likelihood:string;transmission_path:string[];} export interface RedTeamResult{compound_scenarios:Scenario[];summary:string;}
+export interface CommitteeResult{decision:string;confidence:number;executive_summary:string;conditions:string[];unresolved_questions:string[];human_approval_required:boolean;}
+export interface Orchestration{executed_agents:string[];research?:ResearchResult;evidence?:EvidenceResult;red_team?:RedTeamResult;committee?:CommitteeResult;}
+export interface CaseResult{classification?:Classification;plan?:InvestigationPlan;orchestration?:Orchestration;} export interface CaseSummary{id:string;title:string;decision:string;status:string;result?:CaseResult;} export interface AuditEvent{id:string;agent:string;event_type:string;summary:string;created_at?:string;}

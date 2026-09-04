@@ -1,0 +1,650 @@
+import json
+import re
+from typing import Any
+
+import httpx
+
+from .config import settings
+
+
+# Ollama can generate any domain or industry name.
+# Only these implemented capabilities can be activated.
+AVAILABLE_CAPABILITIES = [
+    "case_understanding",
+    "research_agent",
+    "market_intelligence",
+    "competition_intelligence",
+    "technology_assessment",
+    "financial_impact",
+    "quant_finance",
+    "operations_analysis",
+    "supply_chain_analysis",
+    "cyber_risk",
+    "regulatory_risk",
+    "policy_analysis",
+    "stakeholder_analysis",
+    "environmental_risk",
+    "reputation_risk",
+    "dependency_intelligence",
+    "scenario_simulator",
+    "black_swan_red_team",
+    "contrarian",
+    "evidence_verifier",
+    "committee",
+]
+
+
+MANDATORY_CAPABILITIES = [
+    "case_understanding",
+    "black_swan_red_team",
+    "contrarian",
+    "evidence_verifier",
+    "committee",
+]
+
+
+def extract_json_object(
+    model_output: str,
+) -> dict[str, Any]:
+    """
+    Extract one JSON object from an Ollama response.
+
+    The model is instructed to return JSON, but this function also
+    handles Markdown code fences or limited text surrounding the JSON.
+    """
+
+    cleaned = model_output.strip()
+
+    if not cleaned:
+        raise ValueError(
+            "Ollama returned an empty response."
+        )
+
+    cleaned = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned = re.sub(
+        r"\s*```$",
+        "",
+        cleaned,
+    ).strip()
+
+    try:
+        parsed = json.loads(cleaned)
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(
+        r"\{[\s\S]*\}",
+        cleaned,
+    )
+
+    if not match:
+        raise ValueError(
+            "Ollama did not return a JSON object."
+        )
+
+    parsed = json.loads(
+        match.group(0)
+    )
+
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "Ollama response is not a JSON object."
+        )
+
+    return parsed
+
+
+def normalise_string_list(
+    value: Any,
+) -> list[str]:
+    """
+    Convert a model-generated value into a clean,
+    duplicate-free list of strings.
+    """
+
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+
+    for item in value:
+        text = str(item).strip()
+
+        if text and text not in result:
+            result.append(text)
+
+    return result
+
+
+def normalise_agents(
+    value: Any,
+) -> list[str]:
+    """
+    Keep only capabilities implemented by the application.
+
+    The LLM can generate any domain, but it cannot activate
+    imaginary or unavailable agents.
+    """
+
+    requested = normalise_string_list(value)
+
+    selected = [
+        agent
+        for agent in requested
+        if agent in AVAILABLE_CAPABILITIES
+    ]
+
+    selected.extend(MANDATORY_CAPABILITIES)
+
+    return list(
+        dict.fromkeys(selected)
+    )
+
+
+def normalise_confidence(
+    value: Any,
+) -> float:
+    """
+    Convert classification confidence into a value from 0 to 1.
+    """
+
+    try:
+        confidence = float(value)
+
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    confidence = min(
+        max(confidence, 0.0),
+        1.0,
+    )
+
+    return round(confidence, 2)
+
+
+def normalise_boolean(
+    value: Any,
+    default: bool,
+) -> bool:
+    """
+    Safely convert model-generated values into booleans.
+
+    This prevents the string "false" from being treated as True.
+    """
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, int):
+        return value != 0
+
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+
+        if cleaned in {
+            "true",
+            "yes",
+            "1",
+            "required",
+        }:
+            return True
+
+        if cleaned in {
+            "false",
+            "no",
+            "0",
+            "not required",
+        }:
+            return False
+
+    return default
+
+
+def safe_text(
+    value: Any,
+    fallback: str,
+) -> str:
+    """
+    Return a cleaned string or a fallback value.
+    """
+
+    text = str(
+        value or ""
+    ).strip()
+
+    return text or fallback
+
+
+def normalise_region(
+    value: Any,
+) -> str | None:
+    """
+    Convert missing or unknown regions into None.
+    """
+
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    if text.lower() in {
+        "unknown",
+        "not specified",
+        "unspecified",
+        "not provided",
+        "none",
+        "null",
+    }:
+        return None
+
+    return text
+
+
+def validate_classification(
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Validate and normalise the untrusted JSON generated by Ollama.
+    """
+
+    return {
+        "domain": safe_text(
+            raw.get("domain"),
+            "General decision intelligence",
+        ),
+        "industry": safe_text(
+            raw.get("industry"),
+            "Cross-industry",
+        ),
+        "decision_type": safe_text(
+            raw.get("decision_type"),
+            "Strategic decision",
+        ),
+        "region": normalise_region(
+            raw.get("region")
+        ),
+        "objective": safe_text(
+            raw.get("objective"),
+            "Evaluate the submitted decision",
+        ),
+        "summary": safe_text(
+            raw.get("summary"),
+            (
+                "The submitted case requires "
+                "further investigation."
+            ),
+        ),
+        "confidence": normalise_confidence(
+            raw.get("confidence")
+        ),
+        "required_agents": normalise_agents(
+            raw.get("required_agents")
+        ),
+        "missing_inputs": normalise_string_list(
+            raw.get("missing_inputs")
+        ),
+        "research_questions": normalise_string_list(
+            raw.get("research_questions")
+        ),
+        "risk_dimensions": normalise_string_list(
+            raw.get("risk_dimensions")
+        ),
+        "requires_financial_analysis": normalise_boolean(
+            raw.get(
+                "requires_financial_analysis"
+            ),
+            default=False,
+        ),
+        "requires_live_research": normalise_boolean(
+            raw.get(
+                "requires_live_research"
+            ),
+            default=True,
+        ),
+        "classification_reason": safe_text(
+            raw.get("classification_reason"),
+            (
+                "Classification was generated "
+                "from the submitted case."
+            ),
+        ),
+        "classification_method": (
+            "ollama_open_domain"
+        ),
+        "classification_warning": None,
+    }
+
+
+def build_classification_prompt(
+    title: str,
+    decision: str,
+    context: str,
+) -> str:
+    """
+    Build a compact open-domain classification prompt.
+
+    The shorter prompt reduces local model memory usage while
+    preserving universal domain classification.
+    """
+
+    supplied_context = (
+        context.strip()
+        if context.strip()
+        else "No additional context supplied."
+    )
+
+    capabilities = ", ".join(
+        AVAILABLE_CAPABILITIES
+    )
+
+    mandatory = ", ".join(
+        MANDATORY_CAPABILITIES
+    )
+
+    return f"""
+You are the routing agent for a Universal Black Swan Decision War Room.
+
+Understand and classify the submitted decision.
+
+The domain and industry are open-ended. They may belong to any
+sector, discipline, profession, organisation or subject.
+
+Available capabilities:
+{capabilities}
+
+Mandatory capabilities:
+{mandatory}
+
+Rules:
+- Do not invent facts, financial values, dates or sources.
+- Put unknown information in missing_inputs.
+- Use only available capability names in required_agents.
+- Include every mandatory capability.
+- Select only capabilities relevant to the submitted decision.
+- Confidence means confidence in classification only.
+- Region must be null unless a region is stated or clearly implied.
+- Return exactly one valid JSON object.
+- Do not use Markdown.
+- Do not add commentary before or after the JSON.
+
+Return this exact structure:
+{{
+  "domain": "specific open-ended domain",
+  "industry": "specific industry or sector",
+  "decision_type": "type of decision",
+  "region": null,
+  "objective": "what the user wants to decide",
+  "summary": "plain-English summary",
+  "confidence": 0.0,
+  "required_agents": ["available capability"],
+  "missing_inputs": ["missing information"],
+  "research_questions": ["question requiring source-backed evidence"],
+  "risk_dimensions": ["relevant risk dimension"],
+  "requires_financial_analysis": false,
+  "requires_live_research": true,
+  "classification_reason": "brief reason"
+}}
+
+Title:
+{title.strip()}
+
+Decision:
+{decision.strip()}
+
+Context:
+{supplied_context}
+""".strip()
+
+
+def fallback_classification(
+    title: str,
+    decision: str,
+    context: str,
+    warning: str,
+) -> dict[str, Any]:
+    """
+    Keep the War Room operational if Ollama temporarily fails.
+
+    This fallback does not attempt to guess a detailed domain.
+    It explicitly identifies that a general classification was used.
+    """
+
+    combined_context = " ".join(
+        part.strip()
+        for part in [
+            title,
+            decision,
+            context,
+        ]
+        if part.strip()
+    )
+
+    return {
+        "domain": "General decision intelligence",
+        "industry": "Cross-industry",
+        "decision_type": "Strategic decision",
+        "region": None,
+        "objective": decision.strip(),
+        "summary": (
+            combined_context[:500]
+            if combined_context
+            else "The submitted case requires investigation."
+        ),
+        "confidence": 0.3,
+        "required_agents": list(
+            dict.fromkeys(
+                [
+                    "case_understanding",
+                    "research_agent",
+                    "scenario_simulator",
+                    "black_swan_red_team",
+                    "contrarian",
+                    "evidence_verifier",
+                    "committee",
+                ]
+            )
+        ),
+        "missing_inputs": [
+            (
+                "Ollama classification was unavailable. "
+                "Review the case details manually."
+            )
+        ],
+        "research_questions": [
+            (
+                "What reliable external evidence is required "
+                "to evaluate this decision?"
+            )
+        ],
+        "risk_dimensions": [
+            "Strategic risk",
+            "Operational risk",
+            "Financial risk",
+            "External uncertainty",
+        ],
+        "requires_financial_analysis": False,
+        "requires_live_research": True,
+        "classification_reason": (
+            "A general fallback classification was used "
+            "because local LLM classification failed."
+        ),
+        "classification_method": "safe_fallback",
+        "classification_warning": warning[:1000],
+    }
+
+
+async def classify_case(
+    title: str,
+    decision: str,
+    context: str = "",
+) -> dict[str, Any]:
+    """
+    Classify a decision using the locally hosted Ollama model.
+
+    Domain and industry names are open-ended.
+    Agent capabilities remain restricted to implemented capabilities.
+
+    The Ollama call uses CPU inference to avoid the CUDA runner
+    crash previously observed on the RTX 3050.
+    """
+
+    if not title.strip():
+        raise ValueError(
+            "A case title is required."
+        )
+
+    if not decision.strip():
+        raise ValueError(
+            "A decision or question is required."
+        )
+
+    if not settings.enable_ollama:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama is disabled. "
+                "Set ENABLE_OLLAMA=true in backend/.env."
+            ),
+        )
+
+    prompt = build_classification_prompt(
+        title=title,
+        decision=decision,
+        context=context,
+    )
+
+    request_body = {
+        "model": settings.ollama_model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "keep_alive": "10m",
+        "options": {
+            "temperature": 0.1,
+            "num_gpu": 0,
+            "num_ctx": 3072,
+            "num_predict": 700,
+        },
+    }
+
+    endpoint = (
+        f"{settings.ollama_base_url.rstrip('/')}"
+        "/api/generate"
+    )
+
+    try:
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=180.0,
+            write=30.0,
+            pool=10.0,
+        )
+
+        async with httpx.AsyncClient(
+            timeout=timeout,
+        ) as client:
+            response = await client.post(
+                endpoint,
+                json=request_body,
+            )
+
+            response.raise_for_status()
+
+            response_body = response.json()
+
+        model_output = response_body.get(
+            "response",
+            "",
+        )
+
+        raw_classification = extract_json_object(
+            model_output
+        )
+
+        return validate_classification(
+            raw_classification
+        )
+
+    except httpx.ConnectError as exc:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama was not reachable. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    except httpx.TimeoutException as exc:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama classification timed out. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    except httpx.HTTPStatusError as exc:
+        response_text = exc.response.text[:700]
+
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama returned HTTP status "
+                f"{exc.response.status_code}: "
+                f"{response_text}"
+            ),
+        )
+
+    except json.JSONDecodeError as exc:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama returned content that could not "
+                f"be decoded as JSON: {exc}"
+            ),
+        )
+
+    except ValueError as exc:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Ollama returned an invalid "
+                f"classification response: {exc}"
+            ),
+        )
+
+    except Exception as exc:
+        return fallback_classification(
+            title=title,
+            decision=decision,
+            context=context,
+            warning=(
+                "Unexpected classifier error: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        )
