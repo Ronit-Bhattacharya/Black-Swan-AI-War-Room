@@ -1,9 +1,54 @@
-.env
-.venv/
-node_modules/
-dist/
+# Python
 __pycache__/
-.pytest_cache/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Databases
 *.db
-logs/
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# Build
+dist/
+build/
+.next/
+out/
+
+# VSCode
+.vscode/
+
+# IntelliJ
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Ollama
+models/
+ollama_models/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Neuro SAN runtime artifacts
+nsflow_data/
+telemetry/
+``
