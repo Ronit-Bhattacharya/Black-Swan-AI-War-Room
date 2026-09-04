@@ -1,0 +1,1 @@
+export async function api(path:string, options:RequestInit={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});if(!r.ok)throw new Error((await r.json()).detail||'Request failed');return r.json()}

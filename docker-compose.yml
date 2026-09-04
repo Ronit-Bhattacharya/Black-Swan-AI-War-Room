@@ -1,0 +1,14 @@
+services:
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: sqlite:////data/war_room.db
+      ALLOWED_ORIGINS: http://localhost:5173
+    volumes: ["war-room-data:/data"]
+  frontend:
+    build: ./frontend
+    ports: ["5173:80"]
+    depends_on: [backend]
+volumes:
+  war-room-data:
